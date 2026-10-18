@@ -10,7 +10,8 @@ public class Main {
     static final File ACTIVE = new File(DIR, "active.txt");
 
     static Object audio;
-    static Method getConfigs, getUid, getPiid, getProxy, setVol;
+    static Method getConfigs, getUid, getPiid, getProxy;
+    static final Map<Class<?>, Method> volMethods = new HashMap<>();
     static final Map<String, Integer> volumes = new HashMap<>();
     static final Map<Integer, String> appIdToPkg = new HashMap<>();
     static final Map<Integer, long[]> applied = new HashMap<>();
@@ -48,7 +49,6 @@ public class Main {
         getUid = cfg.getMethod("getClientUid");
         getPiid = cfg.getMethod("getPlayerInterfaceId");
         getProxy = cfg.getMethod("getPlayerProxy");
-        setVol = Class.forName("android.media.IPlayer").getMethod("setVolume", float.class);
         applied.clear();
         log("terhubung ke audio service");
     }
@@ -69,17 +69,35 @@ public class Main {
             Object proxy = getProxy.invoke(c);
             if (proxy == null) continue;
             if (pct == null) {
-                if (last != null) { setVol.invoke(proxy, 1f); applied.remove(piid); }
+                if (last != null) { trySet(proxy, 1f); applied.remove(piid); }
                 continue;
             }
             if (last == null || last[0] != pct || now - last[1] > 10000) {
-                setVol.invoke(proxy, pct / 100f);
+                trySet(proxy, pct / 100f);
                 applied.put(piid, new long[]{pct, now});
             }
         }
         applied.keySet().retainAll(seen);
         String joined = String.join("\n", active);
         if (!joined.equals(lastActive)) { write(ACTIVE, joined); lastActive = joined; }
+    }
+
+    static void trySet(Object proxy, float v) {
+        try {
+            Class<?> k = proxy.getClass();
+            Method m = volMethods.get(k);
+            if (m == null) {
+                try { m = k.getMethod("setVolume", float.class); }
+                catch (NoSuchMethodException e) { m = k.getDeclaredMethod("setVolume", float.class); }
+                m.setAccessible(true);
+                volMethods.put(k, m);
+                log("setVolume lewat " + k.getName());
+            }
+            m.invoke(proxy, v);
+        } catch (Throwable t) {
+            Throwable c = t.getCause() != null ? t.getCause() : t;
+            log("setVolume gagal (" + proxy.getClass().getName() + "): " + c);
+        }
     }
 
     static void loadConf() throws IOException {
@@ -140,4 +158,4 @@ public class Main {
             w.write(new Date() + " " + s + "\n");
         } catch (IOException ignored) { }
     }
-          }
+            }
