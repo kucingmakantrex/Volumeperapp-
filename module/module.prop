@@ -1,1 +1,6 @@
-
+id=appvolume
+name=RyoVolumePerApp
+version=v1.0.0
+versionCode=1
+author=Ryo
+description=Atur volume tiap aplikasi lewat WebUI. Pengaturan tetap setelah reboot.
