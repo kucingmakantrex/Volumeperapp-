@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Volume Per Aplikasi</title>
+<style>
+:root{--bg:#f3f5f4;--fg:#1b2220;--mut:#64706c;--card:#fff;--line:#dde3e0;--acc:#0f766e;--on:#16a34a;--off:#b45309}
+@media (prefers-color-scheme:dark){:root{--bg:#101514;--fg:#e6ecea;--mut:#8b9a95;--card:#18201e;--line:#26312e;--acc:#2dd4bf;--on:#4ade80;--off:#fbbf24}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{position:sticky;top:0;background:var(--bg);padding:14px 16px 10px;border-bottom:1px solid var(--line);z-index:2}
+h1{font-size:18px;margin:0 0 2px}
+#st{color:var(--mut);font-size:13px}
+#st b{font-weight:600}.run{color:var(--on)}.stop{color:var(--off)}
+.bar{display:flex;gap:10px;margin-top:10px;align-items:center}
+input[type=search]{flex:1;min-width:0;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg);font:inherit}
+label.sys{font-size:13px;color:var(--mut);white-space:nowrap}
+ul{list-style:none;margin:0;padding:8px 12px 24px}
+li{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px}
+li.set{border-left:3px solid var(--acc)}
+.top{display:flex;align-items:center;gap:10px}
+.top img{width:32px;height:32px;border-radius:7px;flex:none;background:var(--line)}
+.nm{flex:1;min-width:0}
+.nm div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pk{font-size:12px;color:var(--mut)}
+.pct{font-size:20px;font-weight:600;min-width:3.4ch;text-align:right;font-variant-numeric:tabular-nums}
+.pl{font-size:12px;color:var(--on);display:none}li.play .pl{display:block}
+input[type=range]{width:100%;margin:10px 0 0;accent-color:var(--acc)}
+#empty{color:var(--mut);text-align:center;padding:32px 16px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Volume Per Aplikasi</h1>
+  <div id="st">Memeriksa daemon…</div>
+  <div class="bar">
+    <input id="q" type="search" placeholder="Cari aplikasi" autocomplete="off">
+    <label class="sys"><input id="sys" type="checkbox"> Aplikasi sistem</label>
+  </div>
+</header>
+<ul id="list"></ul>
+<div id="empty" hidden>Tidak ada aplikasi yang cocok.</div>
+<script>
+const AV = '/data/adb/modules/appvolume/avctl.sh';
+let n = 0;
+function exec(cmd) {
+  return new Promise((res, rej) => {
+    if (!window.ksu) return rej(new Error('Buka halaman ini dari manager KernelSU'));
+    const cb = `cb_${Date.now()}_${n++}`;
+    window[cb] = (errno, stdout, stderr) => { delete window[cb]; res({ errno, stdout, stderr }); };
+    try { ksu.exec(cmd, '{}', cb); } catch (e) { delete window[cb]; rej(e); }
+  });
+}
+const av = (...a) => exec(`sh ${AV} ${a.join(' ')}`).then(r => r.stdout || '');
+const lines = s => s.split('\n').map(x => x.trim()).filter(Boolean);
+
+let apps = [], vols = {}, active = new Set(), info = {}, timers = {};
+const $ = id => document.getElementById(id);
+
+async function labels(pkgs) {
+  try {
+    const r = JSON.parse(ksu.getPackagesInfo(JSON.stringify(pkgs)));
+    for (const p of r) info[p.packageName] = p.appLabel;
+  } catch (e) {}
+}
+
+async function load() {
+  const all = $('sys').checked;
+  const [a, c] = await Promise.all([av('apps', all ? 'all' : ''), av('get')]);
+  apps = lines(a);
+  vols = {};
+  lines(c).forEach(l => { const i = l.indexOf('='); if (i > 0) vols[l.slice(0, i)] = +l.slice(i + 1); });
+  await labels(apps);
+  render();
+  poll();
+}
+
+async function poll() {
+  const [s, a] = await Promise.all([av('status'), av('active')]);
+  const run = s.trim() === 'running';
+  $('st').innerHTML = run ? '<b class="run">Daemon aktif</b>' : '<b class="stop">Daemon mati</b>. Reboot, atau cek log di /data/adb/appvolume';
+  active = new Set(lines(a));
+  document.querySelectorAll('li[data-p]').forEach(li => li.classList.toggle('play', active.has(li.dataset.p)));
+}
+
+function render() {
+  const q = $('q').value.toLowerCase();
+  const name = p => info[p] || p;
+  const rows = apps.filter(p => !q || p.toLowerCase().includes(q) || name(p).toLowerCase().includes(q))
+    .sort((x, y) => (x in vols ? 0 : 1) - (y in vols ? 0 : 1) || name(x).localeCompare(name(y)));
+  $('empty').hidden = rows.length > 0;
+  const ul = $('list'); ul.textContent = '';
+  for (const p of rows) {
+    const v = p in vols ? vols[p] : 100;
+    const li = document.createElement('li');
+    li.dataset.p = p;
+    li.className = (p in vols ? 'set ' : '') + (active.has(p) ? 'play' : '');
+    li.innerHTML = `<div class="top"><img alt="" loading="lazy" src="ksu://icon/${p}" onerror="this.style.visibility='hidden'">
+      <div class="nm"><div></div><div class="pk"></div><div class="pl">Sedang memutar audio</div></div><div class="pct">${v}%</div></div>
+      <input type="range" min="0" max="100" step="5" value="${v}" aria-label="Volume">`;
+    li.querySelector('.nm div').textContent = name(p);
+    li.querySelector('.pk').textContent = p;
+    const r = li.querySelector('input'), pct = li.querySelector('.pct');
+    r.oninput = () => { pct.textContent = r.value + '%'; save(p, +r.value, li); };
+    ul.appendChild(li);
+  }
+}
+
+function save(p, v, li) {
+  clearTimeout(timers[p]);
+  timers[p] = setTimeout(async () => {
+    if (v >= 100) { delete vols[p]; await av('remove', p); li.classList.remove('set'); }
+    else { vols[p] = v; await av('set', p, v); li.classList.add('set'); }
+  }, 350);
+}
+
+$('q').oninput = render;
+$('sys').onchange = load;
+load().catch(e => { $('st').textContent = e.message; });
+setInterval(() => poll().catch(() => {}), 3000);
+</script>
+</body>
+  </html>
